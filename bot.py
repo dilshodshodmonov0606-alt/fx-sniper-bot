@@ -1,17 +1,18 @@
-import telebot, requests, time, threading
+import telebot, requests, time, threading, os
 
-TOKEN = "8284811491:AAG6vih0p4_38t4MTxqRtj-zW4xBkSi5Kkk"
-CHAT_ID = "wodmonovfx7"
-GOLD_API = "ada8d9fc15d744bc8484dd96ee8f4ca0"
+# ===== ENV VARIABLES =====
+TOKEN = os.getenv("8284811491:AAG6vih0p4_38t4MTxqRtj-zW4xBkSi5Kkk")
+CHAT_ID = os.getenv("wodmonovfx7")
+GOLD_API = os.getenv("ada8d9fc15d744bc8484dd96ee8f4ca0")
 
 bot = telebot.TeleBot(TOKEN)
 
 trades = []
-results = {"tp":0, "sl":0}
+results = {"tp": 0, "sl": 0}
 
 # ===== BTC DATA =====
-def get_btc():
-    url = "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=100"
+def get_klines(symbol):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
     data = requests.get(url).json()
 
     closes = [float(i[4]) for i in data]
@@ -25,6 +26,10 @@ def get_btc():
 def get_gold():
     url = f"https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&apikey={GOLD_API}"
     data = requests.get(url).json()
+
+    if "values" not in data:
+        return None, None, None, None
+
     values = data["values"]
 
     closes = [float(i["close"]) for i in values[::-1]]
@@ -52,8 +57,11 @@ def rsi(prices, period=14):
         else:
             losses.append(abs(diff))
 
-    avg_gain = sum(gains[-period:]) / period if gains else 0
-    avg_loss = sum(losses[-period:]) / period if losses else 0
+    if len(gains) < period or len(losses) < period:
+        return 50
+
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
 
     if avg_loss == 0:
         return 100
@@ -75,24 +83,6 @@ def ict(highs, lows, price):
         return "SELL"
     return None
 
-# ===== ORDER BLOCK (oddiy) =====
-def order_block(highs, lows):
-    return max(highs[-20:]), min(lows[-20:])
-
-# ===== TP/SL =====
-def tp_sl(price, direction):
-    if direction == "BUY":
-        return price - 20, price + 40, price + 80
-    else:
-        return price + 20, price - 40, price - 80
-
-# ===== WINRATE =====
-def winrate():
-    total = results["tp"] + results["sl"]
-    if total == 0:
-        return 0
-    return round(results["tp"] / total * 100, 2)
-
 # ===== SIGNAL =====
 def signal(closes, highs, lows, opens):
     price = closes[-1]
@@ -101,21 +91,11 @@ def signal(closes, highs, lows, opens):
     c = strong_candle(opens, closes)
     i = ict(highs, lows, price)
 
-    ob_high, ob_low = order_block(highs, lows)
+    if price > e and r < 45 and c and i == "BUY":
+        return "BUY", price, price - 20, price + 40, price + 80
 
-    # SNIPER FILTER
-    if abs(price - e) < 5:
-        return None, None, None, None, None
-
-    # BUY
-    if price > e and r < 45 and c and i == "BUY" and ob_low < price < ob_high:
-        sl, tp1, tp2 = tp_sl(price, "BUY")
-        return "BUY", price, sl, tp1, tp2
-
-    # SELL
-    if price < e and r > 55 and c and i == "SELL" and ob_low < price < ob_high:
-        sl, tp1, tp2 = tp_sl(price, "SELL")
-        return "SELL", price, sl, tp1, tp2
+    if price < e and r > 55 and c and i == "SELL":
+        return "SELL", price, price + 20, price - 40, price - 80
 
     return None, None, None, None, None
 
@@ -134,8 +114,6 @@ def check(price):
                 t["status"] = "TP2"
                 results["tp"] += 1
                 bot.send_message(CHAT_ID, "🎯 TP2 HIT")
-            elif price >= t["tp1"]:
-                bot.send_message(CHAT_ID, "🎯 TP1 HIT")
 
         if t["type"] == "SELL":
             if price >= t["sl"]:
@@ -146,46 +124,37 @@ def check(price):
                 t["status"] = "TP2"
                 results["tp"] += 1
                 bot.send_message(CHAT_ID, "🎯 TP2 HIT")
-            elif price <= t["tp1"]:
-                bot.send_message(CHAT_ID, "🎯 TP1 HIT")
+
+# ===== WINRATE =====
+def winrate():
+    total = results["tp"] + results["sl"]
+    return round((results["tp"] / total) * 100, 2) if total else 0
 
 # ===== AUTO =====
 def auto():
     while True:
         try:
             # BTC
-            closes, highs, lows, opens = get_btc()
+            closes, highs, lows, opens = get_klines("BTCUSDT")
             s, p, sl, tp1, tp2 = signal(closes, highs, lows, opens)
 
             if s:
-                trades.append({
-                    "type": s,
-                    "entry": p,
-                    "sl": sl,
-                    "tp1": tp1,
-                    "tp2": tp2,
-                    "status": "OPEN"
-                })
-
-                bot.send_message(
-                    CHAT_ID,
-                    f"🔥 BTC {s}\nEntry: {p}\nSL: {sl}\nTP1: {tp1}\nTP2: {tp2}\nWinrate: {winrate()}%"
-                )
+                trades.append({"type": s, "entry": p, "sl": sl, "tp1": tp1, "tp2": tp2, "status": "OPEN"})
+                bot.send_message(CHAT_ID, f"🔥 BTC {s}\nEntry: {p}\nSL: {sl}\nTP1: {tp1}\nTP2: {tp2}\nWinrate: {winrate()}%")
 
             check(closes[-1])
 
             # GOLD
-            closes, highs, lows, opens = get_gold()
-            s, p, sl, tp1, tp2 = signal(closes, highs, lows, opens)
+            g = get_gold()
+            if g[0]:
+                closes, highs, lows, opens = g
+                s, p, sl, tp1, tp2 = signal(closes, highs, lows, opens)
 
-            if s:
-                bot.send_message(
-                    CHAT_ID,
-                    f"🟡 GOLD {s}\nEntry: {p}\nSL: {sl}\nTP1: {tp1}\nTP2: {tp2}"
-                )
+                if s:
+                    bot.send_message(CHAT_ID, f"🟡 GOLD {s}\nEntry: {p}\nSL: {sl}\nTP1: {tp1}\nTP2: {tp2}")
 
         except Exception as e:
-            print(e)
+            print("ERROR:", e)
 
         time.sleep(30)
 
