@@ -1,9 +1,9 @@
 import telebot, requests, time, threading, os
 
 # ===== ENV VARIABLES =====
-TOKEN = os.getenv("8284811491:AAG6vih0p4_38t4MTxqRtj-zW4xBkSi5Kkk")
-CHAT_ID = os.getenv("wodmonovfx7")
-GOLD_API = os.getenv("ada8d9fc15d744bc8484dd96ee8f4ca0")
+TOKEN = os.getenv("TOKEN")
+CHAT_ID = os.getenv("CHAT_İD")
+GOLD_API = os.getenv("GOLD_APİ")
 
 bot = telebot.TeleBot(TOKEN)
 
